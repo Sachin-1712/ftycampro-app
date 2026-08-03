@@ -1,0 +1,14 @@
+# Core analysis tooling.
+#
+# p2p_probe.py, isolation_check.py, lan_discover.py and apk_signatures.py use
+# only the standard library — they run with no install at all. The pin below is
+# needed for pcap parsing in pcap_triage.py.
+
+scapy>=2.5.0
+
+# Optional, uncomment as needed:
+# mitmproxy>=10.0.0     # HTTPS interception, only if the app actually uses TLS
+# frida-tools>=12.0.0   # SSL unpinning / native hooking on a rooted device
+
+# Dev
+pytest>=7.4.0

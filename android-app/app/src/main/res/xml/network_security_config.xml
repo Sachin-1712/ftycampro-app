@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is permitted only for private address ranges, because that is where
+  the camera lives. Anything routable stays TLS-only.
+
+  This is the inverse of what the vendor app does: those typically set
+  usesCleartextTraffic="true" globally, which permits plaintext to any host on
+  the internet.
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- RFC1918 plus link-local, covering home networks and camera SoftAPs. -->
+        <domain includeSubdomains="true">192.168.0.0/16</domain>
+        <domain includeSubdomains="true">10.0.0.0/8</domain>
+        <domain includeSubdomains="true">172.16.0.0/12</domain>
+        <domain includeSubdomains="true">169.254.0.0/16</domain>
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+
+</network-security-config>

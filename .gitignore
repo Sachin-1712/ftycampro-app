@@ -1,0 +1,51 @@
+# Captured artifacts — these can contain credentials, tokens, UIDs and video.
+# Keep them local; commit only redacted excerpts into research/findings/.
+research/captures/**
+!research/captures/.gitkeep
+!research/captures/README.md
+*.pcap
+*.pcapng
+*.apk
+*.dex
+*.jar
+*.keystore
+*.jks
+
+# Decompiled output — large, regenerable, and vendor-copyrighted.
+research/01-apk-analysis/jadx-out/
+research/01-apk-analysis/apktool-out/
+research/01-apk-analysis/unzipped/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Gradle / Android
+.gradle/
+build/
+local.properties
+captures/
+.cxx/
+*.hprof
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+.env
+secrets.properties
+
+# Local Claude Code config
+.claude/settings.local.json

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ftycam</string>
+
+    <!-- Camera list -->
+    <string name="cameras_title">Cameras</string>
+    <string name="cameras_empty_title">No cameras yet</string>
+    <string name="cameras_empty_body">Add one by UID or by IP address. If the camera is on this Wi-Fi, scanning may find it for you.</string>
+    <string name="cameras_add">Add camera</string>
+    <string name="cameras_scan">Scan network</string>
+    <string name="cameras_scanning">Scanning…</string>
+
+    <!-- Add camera -->
+    <string name="add_title">Add camera</string>
+    <string name="add_by_uid">By UID</string>
+    <string name="add_by_ip">By IP address</string>
+    <string name="add_name">Name</string>
+    <string name="add_name_hint">Living room</string>
+    <string name="add_uid">Device UID</string>
+    <string name="add_uid_hint">ABCD-123456-EFGHI</string>
+    <string name="add_ip">IP address</string>
+    <string name="add_ip_hint">192.168.29.214</string>
+    <string name="add_port">Port</string>
+    <string name="add_username">Username</string>
+    <string name="add_password">Password</string>
+    <string name="add_password_help">Stored encrypted on this device only.</string>
+    <string name="add_save">Save</string>
+    <string name="add_cancel">Cancel</string>
+
+    <!-- Live view -->
+    <string name="live_connecting">Connecting…</string>
+    <string name="live_reconnecting">Reconnecting…</string>
+    <string name="live_snapshot">Snapshot</string>
+    <string name="live_record_start">Record</string>
+    <string name="live_record_stop">Stop</string>
+    <string name="live_mute">Mute</string>
+    <string name="live_unmute">Unmute</string>
+    <string name="live_fullscreen">Fullscreen</string>
+    <string name="live_exit_fullscreen">Exit fullscreen</string>
+    <string name="live_snapshot_saved">Snapshot saved</string>
+    <string name="live_recording_saved">Recording saved</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_video">Video</string>
+    <string name="settings_quality">Stream quality</string>
+    <string name="settings_hw_decode">Hardware decoding</string>
+    <string name="settings_hw_decode_summary">Use the device decoder. Turn off only if video is corrupted.</string>
+    <string name="settings_audio">Audio</string>
+    <string name="settings_audio_default">Start with audio on</string>
+    <string name="settings_storage">Storage</string>
+    <string name="settings_storage_location">Save location</string>
+    <string name="settings_privacy">Privacy</string>
+    <string name="settings_privacy_summary">This app contains no advertising, analytics or crash reporting. Nothing is sent anywhere except your camera.</string>
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_logging">Verbose protocol logging</string>
+    <string name="settings_logging_summary">Records the transport handshake to a local file. Useful while the protocol is still being reverse-engineered.</string>
+    <string name="settings_export_log">Export log</string>
+    <string name="settings_about">About</string>
+    <string name="settings_version">Version</string>
+
+    <!-- Errors -->
+    <string name="error_unreachable">Camera did not respond</string>
+    <string name="error_unreachable_help">It may be asleep, on a different network, or blocked by client isolation on your router.</string>
+    <string name="error_auth">Authentication rejected</string>
+    <string name="error_transport">No transport available for this camera</string>
+    <string name="error_transport_help">The protocol has not been implemented yet. See the project README.</string>
+    <string name="error_retry">Retry</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_back">Back</string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_delete">Delete camera</string>
+    <string name="cd_camera_status_online">Online</string>
+    <string name="cd_camera_status_offline">Offline</string>
+</resources>
