@@ -10,9 +10,9 @@ reverse-engineering tooling that identified it. The camera has been confirmed
 (against the physical device) to be a **CS2 Network PPPP/PPCS** P2P camera with UID
 `XMSYINA-772459-VNYUK`. Discovery works end-to-end from a script; the remaining
 blocker for live video is the vendor-specific session/stream handshake, which needs
-a packet capture of the vendor app to reproduce. The Android app is fully scaffolded
-(Kotlin/Compose/MVVM) and builds are structured but **have not been compiled** —
-this machine has no JVM/Gradle toolchain.
+a packet capture of the vendor app to reproduce. The Android app
+(Kotlin/Compose/MVVM) **compiles, packages to a debug APK, and its 41 unit tests
+pass** (verified 2026-08-04 with Android Studio's bundled JDK 25 + Gradle 9.3).
 
 ## What is CONFIRMED (against the real camera)
 
@@ -52,8 +52,8 @@ Details: [research/findings/02-local-session-gap.md](research/findings/02-local-
 | 3 | Traffic capture + comparison | tooling ready; needs phone + camera + capture host |
 | 4 | Identify SDK / local handshake | SDK **identified (PPPP, confirmed)**; handshake open |
 | 5 | CLI proof of concept | discovery works vs. real device; session/frame open |
-| 6 | Android app | scaffold complete; discovery + DID packing confirmed; **not compiled here** |
-| 7 | Tests, logging, reproducible build | partial; real captured bytes are a test fixture |
+| 6 | Android app | **builds + runs; APK packages**; discovery + DID packing confirmed |
+| 7 | Tests, logging, reproducible build | **41 unit tests pass**; real captured bytes are a fixture |
 
 ## The single next action
 

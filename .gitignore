@@ -49,3 +49,9 @@ secrets.properties
 
 # Local Claude Code config
 .claude/settings.local.json
+
+# Kotlin compiler session cache
+.kotlin/
+
+# Gradle wrapper jar is intentionally committed so ./gradlew works on clone
+!android-app/gradle/wrapper/gradle-wrapper.jar

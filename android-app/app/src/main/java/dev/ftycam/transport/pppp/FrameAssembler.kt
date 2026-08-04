@@ -41,11 +41,21 @@ class FrameAssembler(private val codec: Codec) {
 
         buffer.append(fragment)
 
-        // Emit when a *second* start code appears: that proves the first frame is
-        // complete. Waiting is what avoids handing the decoder a partial access
-        // unit, which it will either drop or render as a corrupt frame.
-        val secondStart = buffer.indexOfStartCode(fromIndex = 1)
-        if (secondStart <= 0) return null
+        // Locate the first frame's start code, then look for the *next* one. Emit
+        // only when the second appears, which proves the first frame is complete —
+        // handing the decoder a partial access unit gets it dropped or rendered
+        // corrupt.
+        //
+        // The search for the second code must begin *after* the first start code,
+        // not at byte 1: a 4-byte start code `00 00 00 01` contains a valid 3-byte
+        // `00 00 01` at its own offset 1, so searching from 1 would "find" a
+        // boundary inside the first frame's own prefix and slice it to nothing.
+        val firstStart = buffer.indexOfStartCode(fromIndex = 0)
+        if (firstStart < 0) return null
+
+        val afterFirst = firstStart + buffer.startCodeLengthAt(firstStart)
+        val secondStart = buffer.indexOfStartCode(fromIndex = afterFirst)
+        if (secondStart < 0) return null
 
         val complete = buffer.take(secondStart)
         buffer.dropFirst(secondStart)
@@ -122,18 +132,25 @@ private class StringBuilderBytes {
         size = 0
     }
 
-    /** Index of the next 4-byte or 3-byte Annex-B start code, or -1. */
+    /** Index of the next 4-byte or 3-byte Annex-B start code at or after [fromIndex], or -1. */
     fun indexOfStartCode(fromIndex: Int): Int {
         var i = fromIndex.coerceAtLeast(0)
         while (i + 2 < size) {
             if (array[i] == 0.toByte() && array[i + 1] == 0.toByte()) {
-                if (array[i + 2] == 1.toByte()) return i
+                // Prefer the 4-byte form: if a zero precedes `00 00 01`, the real
+                // boundary is one byte earlier. Checking the 4-byte pattern first
+                // keeps start-code lengths consistent for startCodeLengthAt.
                 if (i + 3 < size && array[i + 2] == 0.toByte() && array[i + 3] == 1.toByte()) return i
+                if (array[i + 2] == 1.toByte()) return i
             }
             i++
         }
         return -1
     }
+
+    /** Length (3 or 4) of the Annex-B start code known to begin at [pos]. */
+    fun startCodeLengthAt(pos: Int): Int =
+        if (pos + 2 < size && array[pos + 2] == 1.toByte()) 3 else 4
 
     private fun ensureCapacity(required: Int) {
         if (required <= array.size) return

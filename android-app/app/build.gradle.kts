@@ -46,7 +46,15 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs += listOf("-opt-in=kotlin.RequiresOptIn")
+        // Material3 marks large, load-bearing parts of its surface experimental
+        // and this app uses them pervasively, so opt in module-wide rather than
+        // annotating dozens of individual functions. Media3's UnstableApi is an
+        // AndroidX marker (androidx.annotation.OptIn), not a Kotlin one, so it is
+        // opted into per-file with @OptIn at the use sites instead.
+        freeCompilerArgs += listOf(
+            "-opt-in=kotlin.RequiresOptIn",
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+        )
     }
 
     buildFeatures {

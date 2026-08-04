@@ -11,7 +11,6 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.ExtractorsFactory
-import androidx.media3.extractor.ts.H264Extractor
 import dev.ftycam.transport.CameraTransport
 import dev.ftycam.transport.MediaChunk
 import dev.ftycam.transport.rtsp.RtspTransport
@@ -75,9 +74,9 @@ class PlayerController(context: Context) {
         } else {
             Log.i(TAG, "playing pushed elementary stream")
             dataSource.reset()
-            // The stream is raw Annex-B H.264 with no container, so sniffing would
-            // fail; the extractor is named explicitly.
-            val extractors = ExtractorsFactory { arrayOf(H264Extractor()) }
+            // The stream is raw Annex-B H.264 with no container, so the extractor
+            // is named explicitly — Media3 has no bare-H.264 extractor of its own.
+            val extractors = ExtractorsFactory { arrayOf(RawH264Extractor()) }
             ProgressiveMediaSource.Factory(TransportDataSource.Factory(dataSource), extractors)
                 .createMediaSource(MediaItem.fromUri(TransportDataSource.URI))
         }

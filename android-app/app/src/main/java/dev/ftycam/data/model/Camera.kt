@@ -123,7 +123,15 @@ object AddressValidator {
         if (trimmed.isEmpty()) {
             return Result.failure(IllegalArgumentException("Address is required"))
         }
-        if (!IPV4_PATTERN.matches(trimmed) && !trimmed.contains('.')) {
+        // A string of only digits and dots is an attempt at an IPv4 address, so it
+        // must be a *valid* one — otherwise "192.168.29.999" would sail through the
+        // hostname branch below just because it contains a dot.
+        val looksNumeric = trimmed.all { it.isDigit() || it == '.' }
+        if (looksNumeric) {
+            if (!IPV4_PATTERN.matches(trimmed)) {
+                return Result.failure(IllegalArgumentException("Not a valid IP address"))
+            }
+        } else if (!trimmed.contains('.')) {
             return Result.failure(IllegalArgumentException("Not a valid address or hostname"))
         }
         val parsedPort = port.trim().ifEmpty { Address.DEFAULT_PORT.toString() }.toIntOrNull()

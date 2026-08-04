@@ -33,10 +33,12 @@ JDK 17, Android SDK 35, minSdk 26.
 | **Live video over PPPP** | **blocked** — needs the DRW command layer |
 | Snapshot | blocked on the above |
 
-The blocker is one method: `PpppTransport.startStream()`. The framing, discovery,
-handshake and keepalives around it are implemented and runnable; the command that
-tells the camera to start sending video is vendor-specific and can't be written
-until a capture of the vendor app reveals it. It throws
+The app compiles, packages to a debug APK, and all 41 unit tests pass (verified
+with Android Studio's bundled JDK + Gradle 9.3). The blocker for live video is one
+method: `PpppTransport.startStream()`. The framing, discovery, handshake and
+keepalives around it are implemented and runnable; the command that tells the
+camera to start sending video is vendor-specific and can't be written until a
+capture of the vendor app reveals it. It throws
 `TransportException.NotImplemented` rather than connecting and showing a black
 screen, which would look like a player bug and cost an hour to diagnose.
 

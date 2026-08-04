@@ -188,8 +188,9 @@ class PpppTransport(
         }
         Log.i(TAG, "device answered: $reply")
 
-        if (camera.address is Address.Uid) {
-            val did = runCatching { PpppProtocol.encodeUid(camera.address.uid) }.getOrNull()
+        val address = camera.address
+        if (address is Address.Uid) {
+            val did = runCatching { PpppProtocol.encodeUid(address.uid) }.getOrNull()
             if (did != null) {
                 send(sock, target, PpppProtocol.Packet(PpppProtocol.MessageType.P2P_REQ, did).encode())
                 awaitPacket(sock, setOf(PpppProtocol.MessageType.P2P_RDY), HANDSHAKE_TIMEOUT_MS)
