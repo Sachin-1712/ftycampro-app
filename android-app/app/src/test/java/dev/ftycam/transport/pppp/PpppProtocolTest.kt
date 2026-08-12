@@ -28,10 +28,10 @@ class PpppProtocolTest {
     @Test
     fun `encode writes a big endian length`() {
         val payload = ByteArray(300) { 0x41 }
-        val encoded = PpppProtocol.Packet(PpppProtocol.MessageType.DRW, payload).encode()
+        val encoded = PpppProtocol.Packet(PpppProtocol.MessageType.DATA, payload).encode()
 
         assertEquals(0xF1.toByte(), encoded[0])
-        assertEquals(0x70.toByte(), encoded[1])
+        assertEquals(0xD0.toByte(), encoded[1])
         assertEquals(0x01.toByte(), encoded[2]) // 300 = 0x012C
         assertEquals(0x2C.toByte(), encoded[3])
         assertEquals(304, encoded.size)
@@ -40,7 +40,7 @@ class PpppProtocolTest {
     @Test
     fun `decode round trips an encoded packet`() {
         val payload = byteArrayOf(1, 2, 3, 4, 5)
-        val original = PpppProtocol.Packet(PpppProtocol.MessageType.P2P_REQ, payload)
+        val original = PpppProtocol.Packet(PpppProtocol.MessageType.PUNCH_READY, payload)
 
         val decoded = PpppProtocol.decode(original.encode())
 
@@ -121,22 +121,29 @@ class PpppProtocolTest {
     }
 
     @Test
-    fun `message type names cover the handshake`() {
+    fun `message type names use this firmware's numbering`() {
         assertEquals("LAN_SEARCH", PpppProtocol.MessageType.name(0x30))
-        assertEquals("P2P_RDY", PpppProtocol.MessageType.name(0x50))
+        assertEquals("PUNCH_READY", PpppProtocol.MessageType.name(0x42))
+        assertEquals("DATA", PpppProtocol.MessageType.name(0xD0))
+        assertEquals("ALIVE", PpppProtocol.MessageType.name(0xE0))
         assertTrue(PpppProtocol.MessageType.name(0xAB).startsWith("UNKNOWN"))
     }
 
     @Test
+    fun `drw header rejects a payload without the D1 marker`() {
+        // 0x01 is a plausible-looking channel byte but not the sub-header marker.
+        assertNull(PpppProtocol.DrwHeader.parse(byteArrayOf(0x01, 0x00, 0x12, 0x34, 0xAA.toByte())))
+    }
+
+    @Test
     fun `drw header parse rejects a payload with no body`() {
-        assertNull(PpppProtocol.DrwHeader.parse(byteArrayOf(1, 0, 0, 0)))
+        assertNull(PpppProtocol.DrwHeader.parse(byteArrayOf(0xD1.toByte(), 0x00, 0x00, 0x00)))
     }
 
     /**
-     * Real bytes captured from the device on 2026-08-03 (finding 01). This is the
-     * fixture that turns the encode/decode tests from self-consistency checks into
-     * regression tests against ground truth: a change that breaks parsing of an
-     * actual PUNCH_PKT fails here.
+     * Real bytes from a PPPP `PUNCH_PKT` observed on the LAN (finding 01). This
+     * device is *not* the project's camera — see finding 04 — but the packet is a
+     * genuine capture and remains a valid parser regression fixture.
      */
     @Test
     fun `decodes a real captured PUNCH_PKT`() {
@@ -153,24 +160,64 @@ class PpppProtocolTest {
         assertEquals("XMSYINA-772459-VNYUK", PpppProtocol.decodeUid(packet!!.payload))
     }
 
-    /** Re-encoding the captured UID must reproduce the wire payload byte for byte. */
+    /**
+     * The DID from **this project's camera**, exactly as the vendor app sent it in
+     * its PUNCH_READY session opener (finding 05). If `encodeUid` ever stops
+     * reproducing these bytes, the handshake breaks.
+     */
     @Test
-    fun `encodes the captured uid back to the wire bytes`() {
-        val expectedPayload = byteArrayOf(
-            0x58, 0x4D, 0x53, 0x59, 0x49, 0x4E, 0x41, 0x00,
-            0x00, 0x0B, 0xC9.toByte(), 0x6B,
-            0x56, 0x4E, 0x59, 0x55, 0x4B, 0x00, 0x00, 0x00,
+    fun `encodes the FTYA camera uid to the bytes the vendor app sent`() {
+        val fromVendorApp = byteArrayOf(
+            0x46, 0x54, 0x59, 0x41, 0x00, 0x00, 0x00, 0x00, // "FTYA"
+            0x00, 0x0B, 0x67, 0x59,                          // serial 747353 BE
+            0x53, 0x5A, 0x4E, 0x54, 0x4C, 0x00, 0x00, 0x00,  // "SZNTL"
         )
 
-        assertArrayEquals(expectedPayload, PpppProtocol.encodeUid("XMSYINA-772459-VNYUK"))
+        assertArrayEquals(fromVendorApp, PpppProtocol.encodeUid("FTYA-747353-SZNTL"))
+    }
+
+    /** The session opener the camera actually accepts. */
+    @Test
+    fun `punch ready wraps the did in an 0x42 packet`() {
+        val packet = PpppProtocol.punchReady("FTYA-747353-SZNTL")
+
+        assertEquals(0xF1.toByte(), packet[0])
+        assertEquals(0x42.toByte(), packet[1])
+        assertEquals(0x00.toByte(), packet[2])
+        assertEquals(0x14.toByte(), packet[3]) // 20-byte DID
+        assertEquals(24, packet.size)
     }
 
     @Test
     fun `drw header reads channel and sequence`() {
-        val header = PpppProtocol.DrwHeader.parse(byteArrayOf(0x01, 0x00, 0x12, 0x34, 0xAA.toByte()))
+        val header = PpppProtocol.DrwHeader.parse(
+            byteArrayOf(0xD1.toByte(), 0x01, 0x12, 0x34, 0xAA.toByte())
+        )
 
         assertEquals(PpppProtocol.Channel.VIDEO, header?.channel)
         assertEquals(0x1234, header?.sequence)
         assertEquals(4, header?.bodyOffset)
+    }
+
+    @Test
+    fun `data wraps a body with the D1 sub-header`() {
+        val encoded = PpppProtocol.data(PpppProtocol.Channel.COMMAND, 7, byteArrayOf(0xAA.toByte()))
+
+        assertEquals(0xD0.toByte(), encoded[1])
+        assertEquals(0xD1.toByte(), encoded[4]) // sub-header marker
+        assertEquals(0x00.toByte(), encoded[5]) // channel 0
+        assertEquals(0x07.toByte(), encoded[7]) // sequence
+    }
+
+    /** Acks carry a count then that many sequence numbers, as the vendor app does. */
+    @Test
+    fun `data ack carries a count and the sequence list`() {
+        val ack = PpppProtocol.dataAck(0, listOf(1, 2))
+
+        assertEquals(0xD1.toByte(), ack[1]) // DATA_ACK message type
+        assertEquals(0xD2.toByte(), ack[4]) // ack sub-header marker
+        assertEquals(0x02.toByte(), ack[7]) // count = 2
+        assertEquals(0x01.toByte(), ack[9]) // seq 1
+        assertEquals(0x02.toByte(), ack[11]) // seq 2
     }
 }

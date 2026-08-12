@@ -10,6 +10,7 @@ import dev.ftycam.stream.MediaWriter
 import dev.ftycam.stream.PlayerController
 import dev.ftycam.transport.CameraTransport
 import dev.ftycam.transport.ConnectionState
+import dev.ftycam.transport.SessionDiagnostics
 import dev.ftycam.transport.TransportException
 import dev.ftycam.transport.TransportFactory
 import dev.ftycam.util.Log
@@ -116,6 +117,19 @@ class LiveViewModel(
         }
 
         collectJobs += viewModelScope.launch {
+            transport.diagnostics.collect { diagnostics ->
+                _state.update { it.copy(diagnostics = diagnostics) }
+                // Record where it was seen, as metadata only. The endpoint used to
+                // connect always comes from fresh discovery, never from storage.
+                val camera = _state.value.camera
+                val host = diagnostics.host
+                if (camera != null && host != null && diagnostics.discoverySucceeded) {
+                    cameraRepository.noteLastSeen(camera.id, host)
+                }
+            }
+        }
+
+        collectJobs += viewModelScope.launch {
             transport.video.collect { chunk ->
                 playerController?.feed(chunk)
                 if (_state.value.recording) mediaWriter.writeFrame(chunk)
@@ -209,4 +223,5 @@ data class LiveUiState(
     val errorHint: String? = null,
     val sessionDetail: String? = null,
     val toast: String? = null,
+    val diagnostics: SessionDiagnostics = SessionDiagnostics(),
 )

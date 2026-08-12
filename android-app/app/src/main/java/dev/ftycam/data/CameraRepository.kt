@@ -1,6 +1,8 @@
 package dev.ftycam.data
 
+import dev.ftycam.data.model.Address
 import dev.ftycam.data.model.Camera
+import dev.ftycam.transport.pppp.PpppDiscovery
 import dev.ftycam.transport.pppp.PpppProtocol
 import dev.ftycam.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
@@ -9,10 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
-import java.net.SocketTimeoutException
 
 /**
  * Single source of truth for the camera list.
@@ -66,65 +64,57 @@ class CameraRepository(
     /**
      * Broadcast a PPPP LAN_SEARCH and report what answers.
      *
-     * This is the same probe as `tools/p2p_probe.py`, which is the point: if the
-     * script finds the camera from a PC, this finds it from the phone, and if it
-     * doesn't the discrepancy is itself informative — it would mean the phone's
-     * network path differs from the PC's, which usually means client isolation
-     * applies to one and not the other.
+     * Delegates to [PpppDiscovery] so the app and `tools/p2p_probe.py` send the
+     * identical probe — if the script finds the camera from a PC and this doesn't
+     * find it from the phone, that discrepancy is itself informative.
      */
-    suspend fun discover(timeoutMs: Int = DISCOVERY_TIMEOUT_MS): List<DiscoveredCamera> =
-        withContext(ioDispatcher) {
-            val found = mutableMapOf<String, DiscoveredCamera>()
-            runCatching {
-                DatagramSocket().use { socket ->
-                    socket.broadcast = true
-                    socket.soTimeout = SOCKET_POLL_MS
-
-                    val probe = PpppProtocol.lanSearch()
-                    socket.send(
-                        DatagramPacket(
-                            probe,
-                            probe.size,
-                            InetAddress.getByName(BROADCAST_ADDRESS),
-                            PpppProtocol.DEFAULT_PORT,
-                        )
-                    )
-
-                    val buffer = ByteArray(PpppProtocol.MAX_PACKET_SIZE)
-                    val deadline = System.currentTimeMillis() + timeoutMs
-                    while (System.currentTimeMillis() < deadline) {
-                        val datagram = DatagramPacket(buffer, buffer.size)
-                        try {
-                            socket.receive(datagram)
-                        } catch (_: SocketTimeoutException) {
-                            continue
-                        }
-                        val packet = PpppProtocol.decode(datagram.data, datagram.length) ?: continue
-                        val host = datagram.address.hostAddress ?: continue
-                        found[host] = DiscoveredCamera(
-                            host = host,
-                            port = datagram.port,
-                            uid = PpppProtocol.decodeUid(packet.payload),
-                            replyType = packet.typeName,
-                        )
-                        Log.i(TAG, "discovered $host -> ${packet.typeName}")
-                    }
-                }
-            }.onFailure { Log.w(TAG, "discovery failed: ${it.message}") }
-            found.values.toList()
+    suspend fun discover(
+        timeoutMs: Int = PpppDiscovery.DEFAULT_TIMEOUT_MS,
+    ): List<PpppDiscovery.Endpoint> = withContext(ioDispatcher) {
+        PpppDiscovery.search(timeoutMs).also {
+            Log.i(TAG, "discovery returned ${it.size} endpoint(s)")
         }
+    }
 
-    data class DiscoveredCamera(
-        val host: String,
-        val port: Int,
-        val uid: String?,
-        val replyType: String,
-    )
+    /**
+     * Save a camera found by discovery.
+     *
+     * Stored by **UID**, never by the endpoint it happened to answer from: the
+     * reply port is ephemeral and the IP moves with DHCP. The host is kept only as
+     * display metadata.
+     */
+    suspend fun addDiscovered(
+        endpoint: PpppDiscovery.Endpoint,
+        name: String,
+    ) = withContext(ioDispatcher) {
+        val uid = endpoint.uid
+        val camera = Camera(
+            name = name,
+            address = if (uid != null) {
+                Address.Uid(uid)
+            } else {
+                // No UID in the reply — fall back to the canonical PPPP port, not
+                // the ephemeral one we were answered from.
+                Address.Network(endpoint.host, PpppProtocol.DEFAULT_PORT)
+            },
+            lastKnownHost = endpoint.host,
+            lastSeenAtMillis = endpoint.discoveredAtMillis,
+        )
+        add(camera)
+    }
+
+    /** Record where a camera was last seen. Metadata only — never an endpoint. */
+    suspend fun noteLastSeen(cameraId: String, host: String) = withContext(ioDispatcher) {
+        val existing = find(cameraId) ?: return@withContext
+        update(
+            existing.copy(
+                lastKnownHost = host,
+                lastSeenAtMillis = System.currentTimeMillis(),
+            )
+        )
+    }
 
     private companion object {
         const val TAG = "CameraRepository"
-        const val BROADCAST_ADDRESS = "255.255.255.255"
-        const val DISCOVERY_TIMEOUT_MS = 4_000
-        const val SOCKET_POLL_MS = 500
     }
 }

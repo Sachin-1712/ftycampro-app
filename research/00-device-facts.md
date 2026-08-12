@@ -9,11 +9,20 @@ Ground truth. Update as things are measured; keep interpretation out of this fil
 | Marketing name | FtyCamPro / NMCamera "Mini DV" | user |
 | MAC OUI vendor | Beken | ARP + OUI lookup |
 | SoC family | Beken BK72xx-class (inferred, unconfirmed) | OUI |
-| Full MAC | `ae-6e-84-0c-5c-3b` | ARP, 2026-08-03 (locally-administered bit set) |
-| Device UID | **`XMSYINA-772459-VNYUK`** | LAN_SEARCH reply, finding 01 |
-| P2P stack | **CS2 Network PPPP/PPCS**, confirmed | finding 01 |
-| UID prefix family | `XMSYINA` — XM/Sofia (Xiongmai) vendor prefix | finding 01 |
-| Firmware version | _record it_ | vendor app "about" screen |
+| Device UID | **`FTYA-747353-SZNTL`** | vendor app + PUNCH_PKT, findings 03/04 |
+| P2P stack | **CS2 Network PPPP/PPCS**, confirmed | findings 01, 03 |
+| UID prefix family | `FTYA` — FtyCam | finding 04 |
+| Firmware version | **2.2.2.45** | vendor app device card |
+| Mode reported by app | `p2p` | vendor app device card |
+| Storage | No TF-Card fitted | vendor app device card |
+| SoftAP address | **`192.168.1.1`** (camera is the AP gateway) | finding 03 |
+
+> **Correction (2026-08-12, finding 04).** An earlier version of this file recorded
+> the UID as `XMSYINA-772459-VNYUK` with MAC `ae-6e-84-0c-5c-3b` at
+> `192.168.29.24`. That is a *different* PPPP device that answered the broadcast —
+> `LAN_SEARCH` goes to 255.255.255.255 and every PPPP device on the segment
+> replies. It is not this camera and is out of scope. The `XMSYINA` prefix is
+> XM/Sofia; this camera's is `FTYA`.
 
 > **Note on the MAC.** `ae-6e-84...` has the locally-administered bit set (the `a`
 > low nibble = `1010`), so it is a randomised/soft MAC, not a Beken OUI. The Beken

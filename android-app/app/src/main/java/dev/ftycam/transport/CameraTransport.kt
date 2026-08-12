@@ -23,6 +23,14 @@ interface CameraTransport {
     val state: Flow<ConnectionState>
 
     /**
+     * What the last attempt observed, updated as it proceeds.
+     *
+     * Separate from [state] because it stays useful after a failure — the whole
+     * point is to be able to read back what happened.
+     */
+    val diagnostics: Flow<SessionDiagnostics>
+
+    /**
      * Decoded-ready video units, in the order they arrive.
      *
      * For H.264 this emits Annex-B access units with start codes intact, which is
@@ -114,6 +122,30 @@ sealed interface ConnectionState {
     data object Disconnected : ConnectionState
 }
 
+/** Outcome of the PPPP session handshake, kept separate from discovery. */
+enum class HandshakeState { PENDING, FAILED, SUCCEEDED }
+
+/**
+ * What the last connection attempt actually observed.
+ *
+ * Discovery and handshake are reported independently on purpose: they fail for
+ * completely different reasons, and collapsing them into one "connection failed"
+ * is what produced the misleading client-isolation message. Discovery succeeding
+ * while the handshake stalls is the current known state of this project, and the
+ * UI should be able to say exactly that.
+ */
+data class SessionDiagnostics(
+    val discoverySucceeded: Boolean = false,
+    val uid: String? = null,
+    val host: String? = null,
+    /** Ephemeral reply port from the most recent discovery. Never persisted. */
+    val sourcePort: Int? = null,
+    val handshake: HandshakeState = HandshakeState.PENDING,
+    val attemptedEndpoints: List<String> = emptyList(),
+    val trace: List<String> = emptyList(),
+    val discoveredAtMillis: Long? = null,
+)
+
 /** Whatever the transport learned about the session. Surfaced in diagnostics. */
 data class SessionDetail(
     val transportName: String,
@@ -134,11 +166,32 @@ sealed class TransportException(
     cause: Throwable? = null,
 ) : Exception(message, cause) {
 
-    class Unreachable(target: String, cause: Throwable? = null) : TransportException(
-        "Camera did not respond",
-        "Nothing answered at $target. It may be asleep, on another network, or " +
-            "blocked by client isolation on the router — that setting blocks " +
-            "device-to-device traffic while leaving internet access working.",
+    /** Discovery itself found nothing — the camera is absent, asleep, or unreachable. */
+    class NotDiscovered(uid: String, cause: Throwable? = null) : TransportException(
+        "Camera not found on this network",
+        "No device answered the discovery broadcast for $uid. It may be powered " +
+            "off, asleep, or on a different Wi-Fi network than this phone.",
+        cause,
+    )
+
+    /**
+     * Discovery worked but the session never opened.
+     *
+     * This is the honest description of the current state of the project: the
+     * camera is present and answering, and the vendor-specific handshake that
+     * follows discovery has not been reverse-engineered yet. Saying anything about
+     * client isolation here would be actively wrong — isolation would have stopped
+     * discovery too.
+     */
+    class SessionNotEstablished(
+        endpoint: String,
+        cause: Throwable? = null,
+    ) : TransportException(
+        "Camera discovered, but PPPP session establishment did not complete",
+        "The camera answered discovery at $endpoint, so the network path works. " +
+            "It did not respond to the session request. The handshake the vendor " +
+            "app performs after discovery is not yet implemented — see the " +
+            "diagnostics below and research/findings/02-local-session-gap.md.",
         cause,
     )
 

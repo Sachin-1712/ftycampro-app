@@ -8,6 +8,7 @@ import dev.ftycam.transport.Codec
 import dev.ftycam.transport.ConnectionState
 import dev.ftycam.transport.MediaChunk
 import dev.ftycam.transport.SessionDetail
+import dev.ftycam.transport.SessionDiagnostics
 import dev.ftycam.transport.TransportException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +31,10 @@ class RtspTransport(private val camera: Camera) : CameraTransport {
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     override val state = _state.asStateFlow()
+
+    // RTSP does no PPPP discovery, so there is nothing meaningful to report here.
+    private val _diagnostics = MutableStateFlow(SessionDiagnostics())
+    override val diagnostics = _diagnostics.asStateFlow()
 
     override val video = emptyFlow<MediaChunk>()
     override val audio = emptyFlow<MediaChunk>()

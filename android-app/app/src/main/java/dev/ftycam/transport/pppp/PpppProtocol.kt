@@ -27,55 +27,65 @@ object PpppProtocol {
     /** Largest datagram worth attempting to parse. */
     const val MAX_PACKET_SIZE: Int = 2048
 
+    /**
+     * Message types **as used by this camera's firmware** (FTYA, 2.2.2.45).
+     *
+     * This build does not use the documented CS2/PPPP numbering for the session,
+     * keepalive and data messages. Confirmed from a capture of the vendor app
+     * (finding 05):
+     *
+     * | Role         | Documented | This firmware |
+     * |--------------|-----------|---------------|
+     * | session open | 0x20      | **0x42**      |
+     * | keepalive    | 0xF0/0xF1 | **0xE0/0xE1** |
+     * | data         | 0x70/0x71 | **0xD0/0xD1** |
+     *
+     * Sending the documented values gets silence, which is exactly what stalled
+     * this project — see finding 02.
+     */
     object MessageType {
-        const val HELLO = 0x00
-        const val HELLO_ACK = 0x01
-        const val QUERY_DID = 0x08
-        const val QUERY_DID_ACK = 0x09
-        const val DEV_LGN = 0x10
-        const val DEV_LGN_ACK = 0x11
-        const val P2P_REQ = 0x20
         const val LAN_SEARCH = 0x30
         const val LAN_NOTIFY = 0x31
-        const val LAN_NOTIFY_ACK = 0x32
-        const val PUNCH_TO = 0x40
         const val PUNCH_PKT = 0x41
+
+        /** Session open, and the camera's acceptance. Payload is the 20-byte DID. */
         const val PUNCH_READY = 0x42
-        const val P2P_RDY = 0x50
-        const val DRW = 0x70
-        const val DRW_ACK = 0x71
-        const val ALIVE = 0xF0
-        const val ALIVE_ACK = 0xF1
+
+        const val DATA = 0xD0
+        const val DATA_ACK = 0xD1
+        const val ALIVE = 0xE0
+        const val ALIVE_ACK = 0xE1
         const val CLOSE = 0xF8
 
+        // Documented values, kept so a trace can name them if another build
+        // (or another device) ever uses them.
+        const val LEGACY_P2P_REQ = 0x20
+        const val LEGACY_P2P_RDY = 0x50
+        const val LEGACY_DRW = 0x70
+
         fun name(type: Int): String = when (type) {
-            HELLO -> "HELLO"
-            HELLO_ACK -> "HELLO_ACK"
-            QUERY_DID -> "QUERY_DID"
-            QUERY_DID_ACK -> "QUERY_DID_ACK"
-            DEV_LGN -> "DEV_LGN"
-            DEV_LGN_ACK -> "DEV_LGN_ACK"
-            P2P_REQ -> "P2P_REQ"
             LAN_SEARCH -> "LAN_SEARCH"
             LAN_NOTIFY -> "LAN_NOTIFY"
-            LAN_NOTIFY_ACK -> "LAN_NOTIFY_ACK"
-            PUNCH_TO -> "PUNCH_TO"
             PUNCH_PKT -> "PUNCH_PKT"
             PUNCH_READY -> "PUNCH_READY"
-            P2P_RDY -> "P2P_RDY"
-            DRW -> "DRW"
-            DRW_ACK -> "DRW_ACK"
+            DATA -> "DATA"
+            DATA_ACK -> "DATA_ACK"
             ALIVE -> "ALIVE"
             ALIVE_ACK -> "ALIVE_ACK"
             CLOSE -> "CLOSE"
+            LEGACY_P2P_REQ -> "P2P_REQ(legacy)"
+            LEGACY_P2P_RDY -> "P2P_RDY(legacy)"
+            LEGACY_DRW -> "DRW(legacy)"
             else -> "UNKNOWN_0x%02X".format(type)
         }
     }
 
-    /** Channel numbering inside DRW. Confirm against a capture before relying on it. */
+    /** Channel numbering inside the DATA sub-header. Confirmed in finding 05. */
     object Channel {
-        const val CONTROL = 0
+        const val COMMAND = 0
         const val VIDEO = 1
+
+        /** Not seen in the capture; audio may share the command channel. */
         const val AUDIO = 2
     }
 
@@ -128,16 +138,52 @@ object PpppProtocol {
 
     fun lanSearch(): ByteArray = Packet(MessageType.LAN_SEARCH).encode()
 
-    fun queryDid(): ByteArray = Packet(MessageType.QUERY_DID).encode()
-
     fun alive(): ByteArray = Packet(MessageType.ALIVE).encode()
 
     fun aliveAck(): ByteArray = Packet(MessageType.ALIVE_ACK).encode()
 
     fun close(): ByteArray = Packet(MessageType.CLOSE).encode()
 
-    fun drwAck(payload: ByteArray): ByteArray =
-        Packet(MessageType.DRW_ACK, payload.copyOfRange(0, minOf(4, payload.size))).encode()
+    /** Session opener: PUNCH_READY carrying the 20-byte DID. */
+    fun punchReady(uid: String): ByteArray =
+        Packet(MessageType.PUNCH_READY, encodeUid(uid)).encode()
+
+    /**
+     * Wrap a body for the data channel.
+     *
+     * Sub-header is `D1 <channel> <seq:u16be>`, then the body.
+     */
+    fun data(channel: Int, sequence: Int, body: ByteArray): ByteArray {
+        val payload = ByteArray(DrwHeader.SIZE + body.size)
+        payload[0] = DATA_SUBHEADER_MARKER
+        payload[1] = channel.toByte()
+        payload[2] = ((sequence shr 8) and 0xFF).toByte()
+        payload[3] = (sequence and 0xFF).toByte()
+        body.copyInto(payload, DrwHeader.SIZE)
+        return Packet(MessageType.DATA, payload).encode()
+    }
+
+    /**
+     * Acknowledge received data packets.
+     *
+     * Format is `D2 00 <count:u16be> <seq:u16be>...` — one ack can cover several
+     * sequence numbers, which is what the vendor app does.
+     */
+    fun dataAck(channel: Int, sequences: List<Int>): ByteArray {
+        val payload = ByteArray(4 + sequences.size * 2)
+        payload[0] = ACK_SUBHEADER_MARKER
+        payload[1] = channel.toByte()
+        payload[2] = ((sequences.size shr 8) and 0xFF).toByte()
+        payload[3] = (sequences.size and 0xFF).toByte()
+        sequences.forEachIndexed { index, seq ->
+            payload[4 + index * 2] = ((seq shr 8) and 0xFF).toByte()
+            payload[5 + index * 2] = (seq and 0xFF).toByte()
+        }
+        return Packet(MessageType.DATA_ACK, payload).encode()
+    }
+
+    const val DATA_SUBHEADER_MARKER: Byte = 0xD1.toByte()
+    const val ACK_SUBHEADER_MARKER: Byte = 0xD2.toByte()
 
     /**
      * Pack a UID into the 20-byte DID structure: 8-byte prefix, 4-byte big-endian
@@ -189,11 +235,9 @@ object PpppProtocol {
     }
 
     /**
-     * Sub-header carried at the front of every DRW payload.
+     * Sub-header at the front of every DATA payload: `D1 <channel> <seq:u16be>`.
      *
-     * UNCONFIRMED offsets. `tools/pcap_triage.py --dump-flow N` prints the byte
-     * positions that stay constant across packets, which is how these get pinned
-     * down. Until then the defaults are the common case for this SDK family.
+     * Confirmed against the vendor-app capture (finding 05).
      */
     data class DrwHeader(val channel: Int, val sequence: Int, val bodyOffset: Int) {
         companion object {
@@ -201,8 +245,9 @@ object PpppProtocol {
 
             fun parse(payload: ByteArray): DrwHeader? {
                 if (payload.size <= SIZE) return null
+                if (payload[0] != DATA_SUBHEADER_MARKER) return null
                 return DrwHeader(
-                    channel = payload[0].toInt() and 0xFF,
+                    channel = payload[1].toInt() and 0xFF,
                     sequence = ((payload[2].toInt() and 0xFF) shl 8) or (payload[3].toInt() and 0xFF),
                     bodyOffset = SIZE,
                 )

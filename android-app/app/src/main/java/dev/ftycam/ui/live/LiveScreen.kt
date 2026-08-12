@@ -2,6 +2,8 @@ package dev.ftycam.ui.live
 
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -56,6 +59,8 @@ import androidx.media3.ui.PlayerView
 import dev.ftycam.R
 import dev.ftycam.ViewModelFactories
 import dev.ftycam.stream.PlayerController
+import dev.ftycam.transport.HandshakeState
+import dev.ftycam.transport.SessionDiagnostics
 
 @OptIn(UnstableApi::class)
 @androidx.compose.runtime.Composable
@@ -160,17 +165,110 @@ fun LiveScreen(
                 onFullscreen = viewModel::toggleFullscreen,
             )
 
-            state.sessionDetail?.let { detail ->
-                Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(24.dp))
+
+            DiagnosticsPanel(
+                diagnostics = state.diagnostics,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+            )
+        }
+    }
+}
+
+/**
+ * What the last connection attempt actually saw.
+ *
+ * Discovery and handshake are reported as separate lines because they fail for
+ * unrelated reasons. Right now the expected reading is "Discovery: success" with
+ * "Session handshake: failed" — that combination is the current known state of the
+ * protocol work, and showing it plainly is more useful than a single red error.
+ */
+@Composable
+private fun DiagnosticsPanel(
+    diagnostics: SessionDiagnostics,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(
+            text = "DIAGNOSTICS",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.height(8.dp))
+
+        DiagnosticRow(
+            "Discovery",
+            if (diagnostics.discoverySucceeded) "success" else "no reply",
+            if (diagnostics.discoverySucceeded) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+        DiagnosticRow("UID", diagnostics.uid ?: "—")
+        DiagnosticRow("Current IP", diagnostics.host ?: "—")
+        DiagnosticRow(
+            "UDP source port",
+            diagnostics.sourcePort?.let { "$it (ephemeral)" } ?: "—",
+        )
+        DiagnosticRow(
+            "Session handshake",
+            diagnostics.handshake.name.lowercase(),
+            when (diagnostics.handshake) {
+                HandshakeState.SUCCEEDED -> MaterialTheme.colorScheme.primary
+                HandshakeState.FAILED -> MaterialTheme.colorScheme.error
+                HandshakeState.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        if (diagnostics.attemptedEndpoints.isNotEmpty()) {
+            DiagnosticRow("Endpoints tried", diagnostics.attemptedEndpoints.joinToString(", "))
+        }
+
+        if (diagnostics.trace.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "PACKET TRACE",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(4.dp))
+            diagnostics.trace.forEach { line ->
                 Text(
-                    text = detail,
+                    text = line,
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp),
                 )
             }
         }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun DiagnosticRow(
+    label: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.4f),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = valueColor,
+            modifier = Modifier.weight(0.6f),
+        )
     }
 }
 

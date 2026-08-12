@@ -19,6 +19,15 @@ data class Camera(
     val transport: TransportKind = TransportKind.AUTO,
     val streamQuality: StreamQuality = StreamQuality.HIGH,
     val audioEnabled: Boolean = true,
+    /**
+     * Where this camera was last seen. **Metadata only — never used to connect.**
+     *
+     * A UID camera is always relocated by fresh discovery, because DHCP moves it
+     * and because its reply port is ephemeral. This field exists so the UI can say
+     * "last seen at 192.168.29.24" without that address ever becoming an endpoint.
+     */
+    val lastKnownHost: String? = null,
+    val lastSeenAtMillis: Long? = null,
 ) {
     val displayAddress: String
         get() = when (address) {
@@ -32,6 +41,10 @@ data class Camera(
         put("transport", transport.name)
         put("quality", streamQuality.name)
         put("audio", audioEnabled)
+        lastKnownHost?.let { put("lastKnownHost", it) }
+        lastSeenAtMillis?.let { put("lastSeenAt", it) }
+        // The discovery reply port is deliberately absent: it is ephemeral, and
+        // persisting it produced endpoints that were dead on arrival.
         when (address) {
             is Address.Uid -> {
                 put("addressKind", "uid")
@@ -61,6 +74,8 @@ data class Camera(
             streamQuality = runCatching { StreamQuality.valueOf(json.optString("quality")) }
                 .getOrDefault(StreamQuality.HIGH),
             audioEnabled = json.optBoolean("audio", true),
+            lastKnownHost = json.optString("lastKnownHost").takeIf { it.isNotEmpty() },
+            lastSeenAtMillis = json.optLong("lastSeenAt").takeIf { it > 0L },
         )
     }
 }

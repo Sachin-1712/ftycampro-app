@@ -127,13 +127,26 @@ fun CameraListScreen(
                         )
                     }
                     items(state.discovered, key = { it.host }) { found ->
-                        Card(modifier = Modifier.fillMaxWidth()) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.addDiscovered(found) },
+                        ) {
                             Column(Modifier.padding(16.dp)) {
-                                Text("${found.host}:${found.port}", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    text = found.uid ?: "replied ${found.replyType}",
+                                    text = found.uid ?: found.host,
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                Text(
+                                    text = "${found.host} · replied ${found.replyType} " +
+                                        "from port ${found.sourcePort} (ephemeral)",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = "Tap to add",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         }

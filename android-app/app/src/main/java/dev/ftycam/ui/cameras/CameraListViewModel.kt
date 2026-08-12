@@ -3,6 +3,7 @@ package dev.ftycam.ui.cameras
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ftycam.data.CameraRepository
+import dev.ftycam.transport.pppp.PpppDiscovery
 import dev.ftycam.data.model.Camera
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,6 +59,19 @@ class CameraListViewModel(
         }
     }
 
+    /** Save a discovered camera. Stored by UID — the reply port is never kept. */
+    fun addDiscovered(endpoint: PpppDiscovery.Endpoint) {
+        viewModelScope.launch {
+            val name = endpoint.uid?.substringBefore('-')?.takeIf { it.isNotBlank() }
+                ?: endpoint.host
+            repository.addDiscovered(endpoint, name)
+            _discovery.value = _discovery.value.copy(
+                results = _discovery.value.results.filterNot { it.host == endpoint.host },
+                message = "Added $name",
+            )
+        }
+    }
+
     fun delete(cameraId: String) {
         viewModelScope.launch { repository.delete(cameraId) }
     }
@@ -68,7 +82,7 @@ class CameraListViewModel(
 
     private data class DiscoveryState(
         val scanning: Boolean = false,
-        val results: List<CameraRepository.DiscoveredCamera> = emptyList(),
+        val results: List<PpppDiscovery.Endpoint> = emptyList(),
         val message: String? = null,
     )
 }
@@ -77,7 +91,7 @@ data class CameraListUiState(
     val cameras: List<Camera> = emptyList(),
     val isLoading: Boolean = false,
     val isScanning: Boolean = false,
-    val discovered: List<CameraRepository.DiscoveredCamera> = emptyList(),
+    val discovered: List<PpppDiscovery.Endpoint> = emptyList(),
     val message: String? = null,
 ) {
     val isEmpty: Boolean get() = !isLoading && cameras.isEmpty()
