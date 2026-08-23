@@ -3,6 +3,7 @@ package dev.ftycam.transport.pppp
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -145,15 +146,62 @@ class PpppCommandsTest {
         assertEquals(2, PpppCommands.parse(body)?.payload?.size)
     }
 
-    @Test
-    fun `stream setup sends the observed command burst carrying the token`() {
-        val sequence = PpppCommands.startStreamSequence("P91E")
+    private fun cmdOf(frame: ByteArray): Int =
+        ((frame[2].toInt() and 0xFF) shl 8) or (frame[3].toInt() and 0xFF)
 
-        assertEquals(5, sequence.size)
-        sequence.forEach { frame ->
-            // Every command carries the token, obfuscated.
-            val payload = PpppCommands.deobfuscate(frame.copyOfRange(PpppCommands.HEADER_SIZE, frame.size))
-            assertEquals("P91E", payload.toString(Charsets.US_ASCII))
+    private fun payloadOf(frame: ByteArray): ByteArray =
+        PpppCommands.deobfuscate(frame.copyOfRange(PpppCommands.HEADER_SIZE, frame.size))
+
+    /** Every stream command must carry the session token first. */
+    @Test
+    fun `stream setup commands all carry the token`() {
+        PpppCommands.startStreamSequence("P91E").forEach { frame ->
+            assertEquals(
+                "P91E",
+                payloadOf(frame).copyOfRange(0, 4).toString(Charsets.US_ASCII),
+            )
         }
+    }
+
+    /**
+     * The command that actually starts video, with the arguments the vendor app
+     * sends. An earlier version sent the right command ids with token-only
+     * payloads and omitted 0x1830 entirely, so the session opened and no frames
+     * ever arrived.
+     */
+    @Test
+    fun `stream start carries the vendor's arguments`() {
+        val start = PpppCommands.startStreamSequence("P91E")
+            .single { cmdOf(it) == PpppCommands.Cmd.STREAM_START }
+
+        val payload = payloadOf(start)
+
+        assertEquals(12, payload.size)
+        assertArrayEquals(
+            byteArrayOf(0x02, 0, 0, 0, 0x01, 0, 0, 0),
+            payload.copyOfRange(4, 12),
+        )
+    }
+
+    /** The 0x1030 config block observed at 264 bytes: token + 260 zeros. */
+    @Test
+    fun `stream config block is 264 bytes`() {
+        val config = PpppCommands.startStreamSequence("P91E")
+            .single { cmdOf(it) == PpppCommands.Cmd.STREAM_CONFIG }
+
+        val payload = payloadOf(config)
+
+        assertEquals(264, payload.size)
+        assertTrue(payload.copyOfRange(4, 264).all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `stream start is sent before the config block`() {
+        val cmds = PpppCommands.startStreamSequence("P91E").map { cmdOf(it) }
+
+        assertTrue(
+            cmds.indexOf(PpppCommands.Cmd.STREAM_START) <
+                cmds.indexOf(PpppCommands.Cmd.STREAM_CONFIG)
+        )
     }
 }

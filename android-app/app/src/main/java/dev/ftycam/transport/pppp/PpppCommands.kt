@@ -43,11 +43,19 @@ object PpppCommands {
         const val DEVICE_INFO = 0x0810
         const val DEVICE_INFO_REPLY = 0x0811
 
-        // Sent by the vendor app in the burst immediately before video begins.
-        // Which one is literally "start streaming" is not isolated yet — see
-        // startStreamSequence().
-        const val STREAM_SETUP_A = 0x1830
-        const val STREAM_SETUP_B = 0x1030
+        /**
+         * Start the video stream. Payload is the token plus
+         * `02 00 00 00 01 00 00 00`. The camera answers `0x1831` and frames begin.
+         */
+        const val STREAM_START = 0x1830
+        const val STREAM_START_REPLY = 0x1831
+
+        /** 264-byte configuration block sent alongside the start. */
+        const val STREAM_CONFIG = 0x1030
+        const val STREAM_CONFIG_REPLY = 0x1031
+
+        // Further setup the vendor app sends around the same moment. Their exact
+        // roles are unidentified; they are replayed for fidelity.
         const val STREAM_SETUP_C = 0xFF50
         const val STREAM_SETUP_D = 0x1930
         const val STREAM_SETUP_E = 0x0530
@@ -160,20 +168,38 @@ object PpppCommands {
         frame(cmd, token.toByteArray(Charsets.US_ASCII))
 
     /**
-     * The command burst the vendor app sends immediately before video starts.
+     * The commands the vendor app sends to make video start.
      *
-     * Replayed as a sequence because the capture does not isolate which single
-     * command is "start streaming" — all six are sent within the same millisecond
-     * and video follows. Sending the observed sequence is the honest reproduction;
-     * narrowing it to one command needs a capture that varies them.
+     * Reconstructed from the capture by looking at what it does in the ~200ms
+     * before the first frame (finding 07). The important one is
+     * [Cmd.STREAM_START] (`0x1830`) carrying `02 00 00 00 01 00 00 00` after the
+     * token — the camera answers it with `0x1831` and frames follow.
+     *
+     * An earlier version sent these command *ids* with a token-only payload, which
+     * is why the session came up and stayed silent: the ids were right, the
+     * arguments were missing, and `0x1830` was not among them at all.
      */
-    fun startStreamSequence(token: String): List<ByteArray> = listOf(
-        tokenCommand(Cmd.DEVICE_INFO, token),
-        tokenCommand(Cmd.STREAM_SETUP_C, token),
-        tokenCommand(Cmd.STREAM_SETUP_D, token),
-        tokenCommand(Cmd.STREAM_SETUP_E, token),
-        tokenCommand(Cmd.STREAM_SETUP_F, token),
-    )
+    fun startStreamSequence(token: String): List<ByteArray> {
+        val tokenBytes = token.toByteArray(Charsets.US_ASCII)
+        return listOf(
+            // Device info first, exactly as the vendor app does.
+            frame(Cmd.DEVICE_INFO, tokenBytes),
+            // Start the stream. The two words are the payload the vendor app sends;
+            // the second looks like a channel/stream selector.
+            frame(
+                Cmd.STREAM_START,
+                tokenBytes + byteArrayOf(0x02, 0, 0, 0, 0x01, 0, 0, 0),
+            ),
+            // 264-byte configuration block, all zeros after the token.
+            frame(Cmd.STREAM_CONFIG, tokenBytes + ByteArray(STREAM_CONFIG_PAYLOAD)),
+            // Trailing setup the vendor app sends alongside; harmless if ignored.
+            frame(Cmd.STREAM_SETUP_D, tokenBytes),
+            frame(Cmd.STREAM_SETUP_F, tokenBytes),
+        )
+    }
+
+    /** 264-byte 0x1030 payload minus the 4-byte token prefix. */
+    private const val STREAM_CONFIG_PAYLOAD = 260
 
     private const val LOGIN_PAYLOAD_SIZE = 164
     private const val USERNAME_OFFSET = 32

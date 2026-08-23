@@ -49,6 +49,17 @@ class LiveViewModel(
         if (_state.value.connecting) return
 
         viewModelScope.launch {
+            // Close any previous transport first. Retry used to call straight back
+            // into connect(), leaving the old session's socket and keepalive loops
+            // running — a capture showed two sessions to the camera at once, from
+            // two source ports, competing for the same stream.
+            transport?.let { previous ->
+                collectJobs.forEach { it.cancel() }
+                collectJobs.clear()
+                runCatching { previous.disconnect() }
+                transport = null
+            }
+
             if (cameraRepository.cameras.value.isEmpty()) cameraRepository.load()
 
             val camera = cameraRepository.find(cameraId)
