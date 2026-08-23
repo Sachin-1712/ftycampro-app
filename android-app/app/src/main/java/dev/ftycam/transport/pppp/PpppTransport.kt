@@ -177,12 +177,15 @@ class PpppTransport(
         }
         sessionToken = token
 
-        // Start the receive loop before asking for video, so no frames are missed.
-        receiveJob = sessionScope.launch { receiveLoop(sock) }
-        keepaliveJob = sessionScope.launch { keepaliveLoop(sock) }
-
+        // Stream setup is a request/response conversation and reads the socket
+        // itself, so it must complete before the receive loop starts competing for
+        // the same datagrams. Any video arriving mid-exchange is still captured —
+        // sendAwaiting feeds it to the parser.
         startStream(sock, target, token, trace)
         _diagnostics.update { it.copy(trace = trace.snapshot()) }
+
+        receiveJob = sessionScope.launch { receiveLoop(sock) }
+        keepaliveJob = sessionScope.launch { keepaliveLoop(sock) }
 
         _state.value = ConnectionState.Connected(
             SessionDetail(
@@ -521,25 +524,115 @@ class PpppTransport(
      * the observed sequence is reproduced rather than guessed at — see
      * [PpppCommands.startStreamSequence].
      */
+    /**
+     * Bring the stream up the way the vendor app does: as a conversation, not a
+     * burst.
+     *
+     * The vendor app asks for device info and **waits for the 128-byte `0x0811`
+     * reply** before it ever sends the stream-start, then waits for `0x1831` before
+     * the config block. Firing all the commands blind produced a session that
+     * accepted everything and streamed nothing.
+     *
+     * Must run before the receive loop starts, since it reads the socket directly.
+     */
     private suspend fun startStream(
         sock: DatagramSocket,
         target: InetSocketAddress,
         token: String,
         trace: ProtocolTrace,
     ) {
-        val label = "${target.address?.hostAddress}:${target.port}"
-        PpppCommands.startStreamSequence(token).forEach { body ->
+        val tokenBytes = token.toByteArray(Charsets.US_ASCII)
+
+        // 1. Device info. The camera's 128-byte answer seems to be a precondition —
+        //    the vendor app never sends the start command without it.
+        sendAwaiting(
+            sock, target,
+            PpppCommands.frame(PpppCommands.Cmd.DEVICE_INFO, tokenBytes),
+            PpppCommands.Cmd.DEVICE_INFO_REPLY, trace,
+        )
+
+        // 2. Start the stream and wait for the acceptance.
+        val started = sendAwaiting(
+            sock, target,
+            PpppCommands.frame(
+                PpppCommands.Cmd.STREAM_START,
+                tokenBytes + byteArrayOf(0x02, 0, 0, 0, 0x01, 0, 0, 0),
+            ),
+            PpppCommands.Cmd.STREAM_START_REPLY, trace,
+        )
+        if (started == null) {
+            trace.note("camera did not acknowledge the stream start (no 0x1831)")
+        } else {
+            trace.note("stream start accepted")
+        }
+
+        // 3. Config block, then the trailing setup the vendor app sends.
+        sendAwaiting(
+            sock, target,
+            PpppCommands.frame(
+                PpppCommands.Cmd.STREAM_CONFIG,
+                tokenBytes + ByteArray(260),
+            ),
+            PpppCommands.Cmd.STREAM_CONFIG_REPLY, trace,
+        )
+        listOf(PpppCommands.Cmd.STREAM_SETUP_D, PpppCommands.Cmd.STREAM_SETUP_F).forEach { cmd ->
+            val body = PpppCommands.frame(cmd, tokenBytes)
             val packet = PpppProtocol.data(PpppProtocol.Channel.COMMAND, commandSequence++, body)
             runCatching { sock.send(DatagramPacket(packet, packet.size, target)) }
-            val cmd = ((body[2].toInt() and 0xFF) shl 8) or (body[3].toInt() and 0xFF)
-            trace.sent("CMD 0x%04X (stream setup)".format(cmd), label)
-            // The vendor app leaves ~130ms between the start command and the
-            // config that follows, and the camera answers in between. Firing all
-            // five inside two milliseconds gives it no chance to reply, and this
-            // firmware has already shown it dislikes being rushed — the login
-            // needed a pause too.
+            trace.sent("CMD 0x%04X".format(cmd), "${target.address?.hostAddress}:${target.port}")
             delay(STREAM_COMMAND_GAP_MS)
         }
+    }
+
+    /**
+     * Send one command and pump the socket until its reply arrives.
+     *
+     * Keepalives are answered and any video that shows up mid-exchange is fed to
+     * the parser rather than dropped — the camera can start streaming before the
+     * last setup command is acknowledged.
+     */
+    private suspend fun sendAwaiting(
+        sock: DatagramSocket,
+        target: InetSocketAddress,
+        body: ByteArray,
+        expectCmd: Int,
+        trace: ProtocolTrace,
+        timeoutMs: Long = COMMAND_REPLY_TIMEOUT_MS,
+    ): PpppCommands.Reply? {
+        val label = "${target.address?.hostAddress}:${target.port}"
+        val cmd = ((body[2].toInt() and 0xFF) shl 8) or (body[3].toInt() and 0xFF)
+        val packet = PpppProtocol.data(PpppProtocol.Channel.COMMAND, commandSequence++, body)
+        runCatching { sock.send(DatagramPacket(packet, packet.size, target)) }
+        trace.sent("CMD 0x%04X".format(cmd), label)
+
+        val buffer = ByteArray(PpppProtocol.MAX_PACKET_SIZE)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val datagram = DatagramPacket(buffer, buffer.size)
+            try {
+                sock.receive(datagram)
+            } catch (_: SocketTimeoutException) {
+                continue
+            }
+            val incoming = PpppProtocol.decode(datagram.data, datagram.length) ?: continue
+            when (incoming.type) {
+                PpppProtocol.MessageType.ALIVE ->
+                    send(sock, target, PpppProtocol.Packet(PpppProtocol.MessageType.ALIVE_ACK))
+
+                PpppProtocol.MessageType.DATA -> {
+                    val header = PpppProtocol.DrwHeader.parse(incoming.payload) ?: continue
+                    ackData(sock, target, header)
+                    handleData(header, incoming.payload)
+                    if (header.channel == PpppProtocol.Channel.COMMAND) {
+                        val body2 = incoming.payload.copyOfRange(header.bodyOffset, incoming.payload.size)
+                        val reply = PpppCommands.parse(body2)
+                        if (reply?.cmd == expectCmd) return reply
+                    }
+                }
+            }
+        }
+        trace.silence("CMD 0x%04X".format(cmd), label, timeoutMs)
+        return null
     }
 
     override suspend fun setQuality(quality: StreamQuality): Boolean = false
@@ -574,6 +667,9 @@ class PpppTransport(
 
         /** The vendor app leaves ~130ms between stream-setup commands. */
         const val STREAM_COMMAND_GAP_MS = 150L
+
+        /** The camera answered 0x1830 in ~135ms; this is generous headroom. */
+        const val COMMAND_REPLY_TIMEOUT_MS = 3_000L
 
         // The camera pings roughly every 300ms, so keepalives must be brisk.
         const val KEEPALIVE_INTERVAL_MS = 2_000L
