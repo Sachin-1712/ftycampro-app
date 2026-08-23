@@ -121,8 +121,9 @@ fun CameraListScreen(
                 if (state.discovered.isNotEmpty()) {
                     item {
                         Text(
-                            text = "Discovered on this network",
+                            text = "Discovered on this network — tap to add",
                             style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                         )
                     }
@@ -131,22 +132,29 @@ fun CameraListScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { viewModel.addDiscovered(found) },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            ),
                         ) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(
-                                    text = found.uid ?: found.host,
-                                    style = MaterialTheme.typography.titleSmall,
-                                )
-                                Text(
-                                    text = "${found.host} · replied ${found.replyType} " +
-                                        "from port ${found.sourcePort} (ephemeral)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = "Tap to add",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = found.uid ?: found.host,
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    Text(
+                                        text = "${found.host} · replied ${found.replyType} " +
+                                            "from port ${found.sourcePort} (ephemeral)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = stringResource(R.string.cameras_add),
                                 )
                             }
                         }

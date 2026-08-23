@@ -94,5 +94,13 @@ data class CameraListUiState(
     val discovered: List<PpppDiscovery.Endpoint> = emptyList(),
     val message: String? = null,
 ) {
-    val isEmpty: Boolean get() = !isLoading && cameras.isEmpty()
+    /**
+     * Show the empty state only when there is genuinely nothing to display.
+     *
+     * Discovered-but-not-yet-added cameras count as content: keying this on the
+     * saved list alone meant a successful scan reported "Found 1 device(s)" while
+     * the result rendered inside a branch the empty state had replaced, leaving
+     * nothing to tap.
+     */
+    val isEmpty: Boolean get() = !isLoading && cameras.isEmpty() && discovered.isEmpty()
 }
