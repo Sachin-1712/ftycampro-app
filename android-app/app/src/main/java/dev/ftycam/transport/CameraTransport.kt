@@ -145,6 +145,17 @@ data class SessionDiagnostics(
     val attemptedEndpoints: List<String> = emptyList(),
     val trace: List<String> = emptyList(),
     val discoveredAtMillis: Long? = null,
+    /**
+     * Live counters, updated as data arrives.
+     *
+     * These exist to separate "the camera is sending nothing" from "frames arrive
+     * but never reach the screen" — two failures that look identical from the
+     * outside (a black rectangle) and have completely different causes.
+     */
+    val videoPacketsReceived: Int = 0,
+    val videoBytesReceived: Long = 0,
+    val framesAssembled: Int = 0,
+    val commandRepliesReceived: Int = 0,
 )
 
 /** Whatever the transport learned about the session. Surfaced in diagnostics. */

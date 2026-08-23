@@ -205,6 +205,24 @@ private fun DiagnosticsPanel(
             DiagnosticRow("Endpoints tried", diagnostics.attemptedEndpoints.joinToString(", "))
         }
 
+        // These three separate "the camera sent nothing" from "frames arrived but
+        // never reached the screen". Both look like a black rectangle.
+        DiagnosticRow("Command replies", diagnostics.commandRepliesReceived.toString())
+        DiagnosticRow(
+            "Video packets",
+            if (diagnostics.videoPacketsReceived == 0) {
+                "0 — camera is sending no video"
+            } else {
+                "${diagnostics.videoPacketsReceived} (${diagnostics.videoBytesReceived / 1024} KiB)"
+            },
+            if (diagnostics.videoPacketsReceived == 0) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+        )
+        DiagnosticRow("Frames assembled", diagnostics.framesAssembled.toString())
+
         if (diagnostics.trace.isNotEmpty()) {
             Spacer(Modifier.height(16.dp))
             Text(

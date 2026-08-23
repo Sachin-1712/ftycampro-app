@@ -96,6 +96,9 @@ class PpppTransport(
     private var keepaliveJob: Job? = null
 
     private val videoParser = MjpegFrameParser()
+
+    /** Trace for the current attempt, so the receive loop can append to it. */
+    private var activeTrace: ProtocolTrace? = null
     private val audioAssembler = FrameAssembler(Codec.G711_ULAW)
 
     /** Session token from the login reply. Required by every later command. */
@@ -109,6 +112,7 @@ class PpppTransport(
 
         val uid = (camera.address as? Address.Uid)?.uid
         val trace = ProtocolTrace(uid)
+        activeTrace = trace
         _diagnostics.value = SessionDiagnostics(uid = uid, handshake = HandshakeState.PENDING)
 
         // One socket for the whole attempt: discovery *and* session. The camera
@@ -457,12 +461,36 @@ class PpppTransport(
     private suspend fun handleData(header: PpppProtocol.DrwHeader, payload: ByteArray) {
         val body = payload.copyOfRange(header.bodyOffset, payload.size)
         when (header.channel) {
-            PpppProtocol.Channel.VIDEO ->
-                videoParser.feed(body).forEach { _video.emit(it) }
+            PpppProtocol.Channel.VIDEO -> {
+                val frames = videoParser.feed(body)
+                frames.forEach { _video.emit(it) }
+                _diagnostics.update {
+                    it.copy(
+                        videoPacketsReceived = it.videoPacketsReceived + 1,
+                        videoBytesReceived = it.videoBytesReceived + body.size,
+                        framesAssembled = it.framesAssembled + frames.size,
+                    )
+                }
+            }
 
             PpppProtocol.Channel.COMMAND -> {
                 val reply = PpppCommands.parse(body)
-                if (reply != null) Log.d(TAG, "cmd reply 0x%04X (%d bytes)".format(reply.cmd, reply.payload.size))
+                if (reply != null) {
+                    Log.d(TAG, "cmd reply 0x%04X (%d bytes)".format(reply.cmd, reply.payload.size))
+                    // The camera's answers to the stream-setup commands are the
+                    // difference between "it refused to start" and "it started and
+                    // the frames are going astray", so they belong in the trace.
+                    activeTrace?.received(
+                        "CMD 0x%04X (%d bytes)".format(reply.cmd, reply.payload.size),
+                        remote?.let { "${it.address?.hostAddress}:${it.port}" } ?: "camera",
+                    )
+                    _diagnostics.update {
+                        it.copy(
+                            commandRepliesReceived = it.commandRepliesReceived + 1,
+                            trace = activeTrace?.snapshot() ?: it.trace,
+                        )
+                    }
+                }
             }
 
             PpppProtocol.Channel.AUDIO ->
@@ -493,7 +521,7 @@ class PpppTransport(
      * the observed sequence is reproduced rather than guessed at — see
      * [PpppCommands.startStreamSequence].
      */
-    private fun startStream(
+    private suspend fun startStream(
         sock: DatagramSocket,
         target: InetSocketAddress,
         token: String,
@@ -505,6 +533,12 @@ class PpppTransport(
             runCatching { sock.send(DatagramPacket(packet, packet.size, target)) }
             val cmd = ((body[2].toInt() and 0xFF) shl 8) or (body[3].toInt() and 0xFF)
             trace.sent("CMD 0x%04X (stream setup)".format(cmd), label)
+            // The vendor app leaves ~130ms between the start command and the
+            // config that follows, and the camera answers in between. Firing all
+            // five inside two milliseconds gives it no chance to reply, and this
+            // firmware has already shown it dislikes being rushed — the login
+            // needed a pause too.
+            delay(STREAM_COMMAND_GAP_MS)
         }
     }
 
@@ -537,6 +571,9 @@ class PpppTransport(
 
         /** The vendor app pauses ~219ms between handshake and login. */
         const val POST_HANDSHAKE_PAUSE_MS = 250L
+
+        /** The vendor app leaves ~130ms between stream-setup commands. */
+        const val STREAM_COMMAND_GAP_MS = 150L
 
         // The camera pings roughly every 300ms, so keepalives must be brisk.
         const val KEEPALIVE_INTERVAL_MS = 2_000L
