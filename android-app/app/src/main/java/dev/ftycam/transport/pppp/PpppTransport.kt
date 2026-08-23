@@ -95,7 +95,7 @@ class PpppTransport(
     private var receiveJob: Job? = null
     private var keepaliveJob: Job? = null
 
-    private val videoParser = VideoFrameParser()
+    private val videoParser = MjpegFrameParser()
     private val audioAssembler = FrameAssembler(Codec.G711_ULAW)
 
     /** Session token from the login reply. Required by every later command. */
@@ -169,9 +169,9 @@ class PpppTransport(
             SessionDetail(
                 transportName = "PPPP/PPCS",
                 remote = endpoint.display,
-                videoCodec = Codec.H264,
+                videoCodec = Codec.MJPEG,
                 audioCodec = Codec.G711_ULAW,
-                notes = "Session open, logged in, stream requested.",
+                notes = "Session open, logged in, stream requested. Video is MJPEG 640x480.",
             )
         )
     }
@@ -317,8 +317,15 @@ class PpppTransport(
                     trace.received("CMD 0x%04X".format(reply.cmd), "${datagram.address?.hostAddress}:${datagram.port}")
                     if (reply.cmd == PpppCommands.Cmd.LOGIN_REPLY) {
                         val token = PpppCommands.sessionToken(reply)
-                        if (token == null) trace.note("login rejected by camera")
-                        else trace.note("login accepted, session token acquired")
+                        if (token == null) {
+                            // Report the code rather than a bare "rejected" — the
+                            // difference between a bad password and a parsing bug
+                            // is exactly what this number tells you.
+                            val code = PpppCommands.loginResultCode(reply)
+                            trace.note("login rejected, result code=$code")
+                        } else {
+                            trace.note("login accepted, session token acquired")
+                        }
                         return token
                     }
                 }

@@ -37,6 +37,38 @@ class MediaWriter(
     private var recordingStream: OutputStream? = null
     private var recordingFile: File? = null
 
+    /**
+     * Save an already-encoded JPEG frame.
+     *
+     * The camera streams MJPEG, so a snapshot is just the current frame's bytes.
+     * Writing them verbatim avoids a decode/re-encode round trip and the generation
+     * loss that comes with it.
+     */
+    suspend fun saveJpegSnapshot(jpeg: ByteArray): Result<String> = withContext(ioDispatcher) {
+        runCatching {
+            val name = "ftycam-${timestamp()}.jpg"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ftycam")
+                }
+                val uri = context.contentResolver
+                    .insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("MediaStore rejected the insert")
+                context.contentResolver.openOutputStream(uri)?.use { it.write(jpeg) }
+                    ?: error("Could not open $uri for writing")
+            } else {
+                val directory = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    "ftycam",
+                ).apply { mkdirs() }
+                FileOutputStream(File(directory, name)).use { it.write(jpeg) }
+            }
+            name
+        }.onFailure { Log.e(TAG, "snapshot failed", it) }
+    }
+
     suspend fun saveSnapshot(bitmap: Bitmap): Result<String> = withContext(ioDispatcher) {
         runCatching {
             val name = "ftycam-${timestamp()}.jpg"

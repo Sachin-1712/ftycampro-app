@@ -1,5 +1,8 @@
 package dev.ftycam.ui.live
 
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ftycam.data.CameraRepository
@@ -14,12 +17,14 @@ import dev.ftycam.transport.SessionDiagnostics
 import dev.ftycam.transport.TransportException
 import dev.ftycam.transport.TransportFactory
 import dev.ftycam.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class LiveViewModel(
     private val cameraRepository: CameraRepository,
@@ -131,8 +136,27 @@ class LiveViewModel(
 
         collectJobs += viewModelScope.launch {
             transport.video.collect { chunk ->
-                playerController?.feed(chunk)
                 if (_state.value.recording) mediaWriter.writeFrame(chunk)
+
+                // The camera sends MJPEG, so each chunk is a complete JPEG and can
+                // be decoded on its own. Decoding runs off the main thread; the
+                // resulting bitmap is what the UI draws.
+                val bitmap = withContext(Dispatchers.Default) {
+                    runCatching {
+                        BitmapFactory.decodeByteArray(chunk.data, 0, chunk.data.size)
+                    }.getOrNull()
+                }
+                if (bitmap != null) {
+                    _state.update {
+                        it.copy(
+                            frame = bitmap.asImageBitmap(),
+                            lastFrameJpeg = chunk.data,
+                            framesReceived = it.framesReceived + 1,
+                        )
+                    }
+                } else {
+                    Log.w(TAG, "could not decode a ${chunk.data.size}-byte frame")
+                }
             }
         }
     }
@@ -166,13 +190,22 @@ class LiveViewModel(
         }
     }
 
-    fun onSnapshotResult(result: Result<String>) {
-        _state.update {
-            it.copy(
-                toast = result.fold(
-                    onSuccess = { name -> "Snapshot saved: $name" },
-                    onFailure = { error -> "Snapshot failed: ${error.message}" },
-                )
+    /**
+     * Save the current frame.
+     *
+     * The camera already sends JPEG, so the bytes go straight to disk — no decode,
+     * no re-encode, no quality loss.
+     */
+    fun takeSnapshot() {
+        val jpeg = _state.value.lastFrameJpeg
+        if (jpeg == null) {
+            _state.update { it.copy(toast = "No frame yet") }
+            return
+        }
+        viewModelScope.launch {
+            mediaWriter.saveJpegSnapshot(jpeg).fold(
+                onSuccess = { name -> _state.update { it.copy(toast = "Snapshot saved: $name") } },
+                onFailure = { e -> _state.update { it.copy(toast = "Snapshot failed: ${e.message}") } },
             )
         }
     }
@@ -224,4 +257,9 @@ data class LiveUiState(
     val sessionDetail: String? = null,
     val toast: String? = null,
     val diagnostics: SessionDiagnostics = SessionDiagnostics(),
+    /** Most recent decoded frame, drawn by the viewer. */
+    val frame: ImageBitmap? = null,
+    /** The same frame still as JPEG — snapshots write these bytes straight out. */
+    val lastFrameJpeg: ByteArray? = null,
+    val framesReceived: Int = 0,
 )

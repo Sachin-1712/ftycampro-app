@@ -1,6 +1,6 @@
 package dev.ftycam.ui.live
 
-import androidx.annotation.OptIn
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -45,24 +45,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import dev.ftycam.R
 import dev.ftycam.ViewModelFactories
-import dev.ftycam.stream.PlayerController
 import dev.ftycam.transport.HandshakeState
 import dev.ftycam.transport.SessionDiagnostics
 
-@OptIn(UnstableApi::class)
 @androidx.compose.runtime.Composable
 @Suppress("LongMethod")
 fun LiveScreen(
@@ -71,18 +67,11 @@ fun LiveScreen(
     viewModel: LiveViewModel = viewModel(factory = ViewModelFactories.live),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
 
-    val controller = remember { PlayerController(context) }
-
     DisposableEffect(cameraId) {
-        viewModel.attachPlayer(controller)
         viewModel.connect(cameraId)
-        onDispose {
-            viewModel.disconnect()
-            controller.release()
-        }
+        onDispose { viewModel.disconnect() }
     }
 
     LaunchedEffect(state.toast) {
@@ -94,7 +83,7 @@ fun LiveScreen(
 
     if (state.fullscreen) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            VideoSurface(controller, Modifier.fillMaxSize())
+            VideoSurface(state.frame, Modifier.fillMaxSize())
             IconButton(
                 onClick = viewModel::toggleFullscreen,
                 modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
@@ -124,7 +113,7 @@ fun LiveScreen(
                     .background(Color.Black),
                 contentAlignment = Alignment.Center,
             ) {
-                VideoSurface(controller, Modifier.fillMaxSize())
+                VideoSurface(state.frame, Modifier.fillMaxSize())
 
                 when {
                     state.error != null -> ErrorOverlay(
@@ -148,19 +137,7 @@ fun LiveScreen(
                 recording = state.recording,
                 enabled = state.connected,
                 onMuteToggle = viewModel::toggleMute,
-                onSnapshot = {
-                    // PlayerView owns the rendered frame, so the snapshot is taken
-                    // from the surface rather than from the transport. Cameras that
-                    // expose a native snapshot command can override this via
-                    // CameraTransport.requestSnapshot().
-                    viewModel.onSnapshotResult(
-                        Result.failure(
-                            NotImplementedError(
-                                "Surface capture needs a TextureView-backed PlayerView"
-                            )
-                        )
-                    )
-                },
+                onSnapshot = viewModel::takeSnapshot,
                 onRecordToggle = viewModel::toggleRecording,
                 onFullscreen = viewModel::toggleFullscreen,
             )
@@ -272,19 +249,27 @@ private fun DiagnosticRow(
     }
 }
 
-@OptIn(UnstableApi::class)
+/**
+ * Draws the most recent MJPEG frame.
+ *
+ * The camera sends complete JPEGs, so there is no decoder pipeline to drive — each
+ * frame is decoded to a Bitmap in the view model and simply drawn here. ExoPlayer
+ * is not involved; it would be the wrong tool for a stream of stills.
+ */
 @Composable
-private fun VideoSurface(controller: PlayerController, modifier: Modifier = Modifier) {
-    AndroidView(
+private fun VideoSurface(frame: ImageBitmap?, modifier: Modifier = Modifier) {
+    if (frame == null) {
+        Box(modifier.background(Color.Black))
+        return
+    }
+    Image(
+        bitmap = frame,
+        contentDescription = null,
         modifier = modifier,
-        factory = { context ->
-            PlayerView(context).apply {
-                player = controller.player
-                useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                setShutterBackgroundColor(android.graphics.Color.BLACK)
-            }
-        },
+        contentScale = ContentScale.Fit,
+        // Nearest-neighbour keeps a 640x480 frame crisp when scaled up, instead of
+        // the blur bilinear filtering would give.
+        filterQuality = FilterQuality.None,
     )
 }
 

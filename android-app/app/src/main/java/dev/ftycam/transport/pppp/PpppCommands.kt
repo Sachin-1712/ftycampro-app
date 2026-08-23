@@ -14,12 +14,19 @@ package dev.ftycam.transport.pppp
  * Requests use an even command id, the reply is the next value up: `2010` → `2011`,
  * `0810` → `0811`, `1830` → `1831`.
  *
- * ## Obfuscation
+ * ## Obfuscation is one-directional
  *
- * Payloads are **XOR'd with 0x01**. That is all — no key exchange, no negotiation,
- * no real cryptography. Plaintext `00` padding appears on the wire as `01`, and
- * `"admin"` appears as `60 65 6C 68 6F`. Calling it encryption would overstate it;
- * it deters casual inspection and nothing more.
+ * | Direction | Payload |
+ * |---|---|
+ * | app → camera | **XOR 0x01** |
+ * | camera → app | **cleartext** |
+ *
+ * Confirmed in finding 06. Deobfuscating replies turns the success code
+ * `00 00 00 00` into `01 01 01 01` and makes every login look rejected — which is
+ * exactly the bug that produced "Authentication rejected" on a camera that had in
+ * fact accepted the login.
+ *
+ * The XOR is obfuscation, not encryption: no key exchange, no negotiation.
  */
 object PpppCommands {
 
@@ -76,7 +83,12 @@ object PpppCommands {
         override fun hashCode(): Int = 31 * cmd + payload.contentHashCode()
     }
 
-    /** Parse a command frame from channel 0. Payload is returned deobfuscated. */
+    /**
+     * Parse a reply from the camera on channel 0.
+     *
+     * The payload is returned **as it arrived**. Camera→app payloads are not
+     * obfuscated — see the class docs. Do not add a `deobfuscate` here.
+     */
     fun parse(body: ByteArray): Reply? {
         if (body.size < HEADER_SIZE) return null
         if (body[0] != MAGIC_0 || body[1] != MAGIC_1) return null
@@ -84,7 +96,7 @@ object PpppCommands {
         val declared = ((body[5].toInt() and 0xFF) shl 8) or (body[4].toInt() and 0xFF)
         val available = body.size - HEADER_SIZE
         val length = minOf(declared, available).coerceAtLeast(0)
-        return Reply(cmd, deobfuscate(body.copyOfRange(HEADER_SIZE, HEADER_SIZE + length)))
+        return Reply(cmd, body.copyOfRange(HEADER_SIZE, HEADER_SIZE + length))
     }
 
     /**
@@ -117,15 +129,27 @@ object PpppCommands {
         frame(Cmd.LOGIN, loginPayload(username, password))
 
     /**
+     * Result code from a login reply: 0 is success. Null if this isn't a login reply.
+     *
+     * Exposed so a failed login can report *why* rather than just "rejected".
+     */
+    fun loginResultCode(reply: Reply): Int? {
+        if (reply.cmd != Cmd.LOGIN_REPLY || reply.payload.size < 4) return null
+        return (reply.payload[0].toInt() and 0xFF) or
+            ((reply.payload[1].toInt() and 0xFF) shl 8) or
+            ((reply.payload[2].toInt() and 0xFF) shl 16) or
+            ((reply.payload[3].toInt() and 0xFF) shl 24)
+    }
+
+    /**
      * Extract the session token from a `2011` login reply.
      *
-     * Reply payload is `<result:u32> <token:4 bytes> ...`; the token is ASCII and
-     * arrives in the clear. Every later command carries it obfuscated.
+     * Payload is `<result:u32le> <token:4 ASCII bytes> ...`, in clear — the observed
+     * reply was `00 00 00 00 50 39 31 45 ...`, i.e. success plus `"P91E"`.
      */
     fun sessionToken(reply: Reply): String? {
         if (reply.cmd != Cmd.LOGIN_REPLY || reply.payload.size < TOKEN_OFFSET + TOKEN_SIZE) return null
-        val result = reply.payload.copyOfRange(0, 4)
-        if (result.any { it != 0.toByte() }) return null // non-zero result = rejected
+        if (loginResultCode(reply) != 0) return null
         return reply.payload
             .copyOfRange(TOKEN_OFFSET, TOKEN_OFFSET + TOKEN_SIZE)
             .toString(Charsets.US_ASCII)

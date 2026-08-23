@@ -103,6 +103,7 @@ data class MediaChunk(
 }
 
 enum class Codec {
+    MJPEG,
     H264,
     H265,
     G711_ULAW,
