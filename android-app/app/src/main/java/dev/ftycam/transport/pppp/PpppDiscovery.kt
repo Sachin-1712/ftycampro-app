@@ -118,11 +118,74 @@ object PpppDiscovery {
         found.values.toList()
     }
 
-    /** Locate one camera by UID. Returns null if it did not answer this round. */
+    /**
+     * Locate one camera by UID, returning **the moment it answers**.
+     *
+     * [search] deliberately waits out its whole window to enumerate every device.
+     * That is wrong here: the reply port is ephemeral, and waiting the full four
+     * seconds before using it meant sending the session request to an address the
+     * camera had already moved on from. Answers typically arrive in ~5ms, so
+     * exiting early is both correct and much faster.
+     *
+     * Pass [socket] to run discovery on the same socket that will carry the
+     * session. The camera answers from a fresh port each time and appears to bind
+     * the session to the endpoint that asked, so discovering on a throwaway socket
+     * and then switching source ports is a difference worth not having.
+     */
     suspend fun findByUid(
         uid: String,
         timeoutMs: Int = DEFAULT_TIMEOUT_MS,
         trace: ProtocolTrace? = null,
+        socket: DatagramSocket? = null,
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
-    ): Endpoint? = search(timeoutMs, uid, trace, dispatcher).firstOrNull()
+    ): Endpoint? = withContext(dispatcher) {
+        val owned = socket == null
+        val sock = socket ?: DatagramSocket()
+        var result: Endpoint? = null
+        runCatching {
+            sock.broadcast = true
+            sock.soTimeout = SOCKET_POLL_MS
+
+            val probe = PpppProtocol.lanSearch()
+            val destination = "$BROADCAST_ADDRESS:${PpppProtocol.DEFAULT_PORT}"
+            sock.send(
+                DatagramPacket(
+                    probe,
+                    probe.size,
+                    InetAddress.getByName(BROADCAST_ADDRESS),
+                    PpppProtocol.DEFAULT_PORT,
+                )
+            )
+            trace?.sent("LAN_SEARCH", destination)
+
+            val buffer = ByteArray(PpppProtocol.MAX_PACKET_SIZE)
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (result == null && System.currentTimeMillis() < deadline) {
+                val datagram = DatagramPacket(buffer, buffer.size)
+                try {
+                    sock.receive(datagram)
+                } catch (_: SocketTimeoutException) {
+                    continue
+                }
+                val packet = PpppProtocol.decode(datagram.data, datagram.length) ?: continue
+                val host = datagram.address?.hostAddress ?: continue
+                val endpoint = Endpoint(
+                    uid = PpppProtocol.decodeUid(packet.payload),
+                    host = host,
+                    sourcePort = datagram.port,
+                    replyType = packet.typeName,
+                )
+                trace?.received("${packet.typeName} uid=${endpoint.uid}", endpoint.display)
+                if (uid.equals(endpoint.uid, ignoreCase = true)) {
+                    result = endpoint
+                } else {
+                    trace?.note("ignoring ${endpoint.uid} — looking for $uid")
+                }
+            }
+            if (result == null) trace?.silence("LAN_SEARCH", destination, timeoutMs.toLong())
+        }.onFailure { trace?.note("discovery failed: ${it.message}") }
+
+        if (owned) runCatching { sock.close() }
+        result
+    }
 }

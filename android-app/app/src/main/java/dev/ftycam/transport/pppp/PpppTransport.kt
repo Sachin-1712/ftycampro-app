@@ -111,8 +111,25 @@ class PpppTransport(
         val trace = ProtocolTrace(uid)
         _diagnostics.value = SessionDiagnostics(uid = uid, handshake = HandshakeState.PENDING)
 
+        // One socket for the whole attempt: discovery *and* session. The camera
+        // binds the session to the endpoint that asked, so discovering on a
+        // throwaway socket and then sending the session request from a different
+        // source port leaves the camera answering the handshake but ignoring the
+        // data channel.
+        val sock = DatagramSocket().apply {
+            broadcast = true
+            soTimeout = SOCKET_TIMEOUT_MS
+        }
+        socket = sock
+
         // Step 1 — always rediscover. Any address we hold is stale by construction.
-        val endpoint = resolveEndpoint(uid, trace)
+        val endpoint = try {
+            resolveEndpoint(uid, trace, sock)
+        } catch (e: Throwable) {
+            runCatching { sock.close() }
+            socket = null
+            throw e
+        }
 
         _diagnostics.update {
             it.copy(
@@ -125,8 +142,6 @@ class PpppTransport(
             )
         }
 
-        val sock = DatagramSocket().apply { soTimeout = SOCKET_TIMEOUT_MS }
-        socket = sock
         val sessionScope = CoroutineScope(SupervisorJob() + ioDispatcher)
         scope = sessionScope
 
@@ -186,6 +201,7 @@ class PpppTransport(
     private suspend fun resolveEndpoint(
         uid: String?,
         trace: ProtocolTrace,
+        socket: DatagramSocket,
     ): PpppDiscovery.Endpoint = when (val address = camera.address) {
         is Address.Network -> {
             trace.note("using manually entered endpoint ${address.host}:${address.port}")
@@ -199,7 +215,7 @@ class PpppTransport(
 
         is Address.Uid -> {
             trace.note("rediscovering ${address.uid} (stored ports are never reused)")
-            PpppDiscovery.findByUid(address.uid, trace = trace)
+            PpppDiscovery.findByUid(address.uid, trace = trace, socket = socket)
                 ?: run {
                     _diagnostics.update {
                         it.copy(discoverySucceeded = false, trace = trace.snapshot())
@@ -256,18 +272,38 @@ class PpppTransport(
             runCatching { sock.send(DatagramPacket(punch, punch.size, candidate)) }
             trace.sent("PUNCH_READY (+DID)", label)
 
-            val reply = awaitPacket(
-                sock,
-                setOf(PpppProtocol.MessageType.PUNCH_READY, PpppProtocol.MessageType.ALIVE),
-                HANDSHAKE_TIMEOUT_MS,
-                trace,
-            )
-            if (reply != null) {
-                // The camera pings as soon as it accepts; answer immediately so the
-                // session isn't torn down while we continue.
-                if (reply.type == PpppProtocol.MessageType.ALIVE) {
-                    send(sock, candidate, PpppProtocol.Packet(PpppProtocol.MessageType.ALIVE_ACK))
+            // Mirror the vendor app: it answers the camera's ping, sends one of its
+            // own, and only then logs in. Treating the first ALIVE as "accepted" and
+            // charging straight into the login skips the camera's PUNCH_READY echo,
+            // which is the actual acceptance.
+            var echoed = false
+            var sawAlive = false
+            val deadline = System.currentTimeMillis() + HANDSHAKE_TIMEOUT_MS
+            val buffer = ByteArray(PpppProtocol.MAX_PACKET_SIZE)
+
+            while (System.currentTimeMillis() < deadline && !echoed) {
+                val datagram = DatagramPacket(buffer, buffer.size)
+                try {
+                    sock.receive(datagram)
+                } catch (_: SocketTimeoutException) {
+                    continue
                 }
+                val packet = PpppProtocol.decode(datagram.data, datagram.length) ?: continue
+                trace.received(packet.typeName, "${datagram.address?.hostAddress}:${datagram.port}")
+                when (packet.type) {
+                    PpppProtocol.MessageType.ALIVE -> {
+                        send(sock, candidate, PpppProtocol.Packet(PpppProtocol.MessageType.ALIVE_ACK))
+                        sawAlive = true
+                    }
+                    PpppProtocol.MessageType.PUNCH_READY -> echoed = true
+                }
+            }
+
+            if (echoed || sawAlive) {
+                if (!echoed) trace.note("no PUNCH_READY echo, but the camera is talking — continuing")
+                // Announce ourselves the way the vendor app does.
+                send(sock, candidate, PpppProtocol.Packet(PpppProtocol.MessageType.ALIVE))
+                trace.sent("ALIVE", label)
                 trace.note("session accepted at $label")
                 return true
             }
@@ -289,12 +325,18 @@ class PpppTransport(
         password: String,
         trace: ProtocolTrace,
     ): String? {
+        // The vendor app waits ~200ms after the handshake before logging in. The
+        // camera appears to need a beat to finish setting the session up; sending
+        // 2ms after the handshake got no reply at all.
+        delay(POST_HANDSHAKE_PAUSE_MS)
+
         val body = PpppCommands.login(username, password)
         val packet = PpppProtocol.data(PpppProtocol.Channel.COMMAND, commandSequence++, body)
         runCatching { sock.send(DatagramPacket(packet, packet.size, target)) }
         // Credentials are never traced — only the fact that a login went out.
         trace.sent("CMD 0x2010 LOGIN (credentials redacted)", "${target.address?.hostAddress}:${target.port}")
 
+        var resent = false
         val deadline = System.currentTimeMillis() + LOGIN_TIMEOUT_MS
         val buffer = ByteArray(PpppProtocol.MAX_PACKET_SIZE)
         while (System.currentTimeMillis() < deadline) {
@@ -302,6 +344,13 @@ class PpppTransport(
             try {
                 sock.receive(datagram)
             } catch (_: SocketTimeoutException) {
+                // UDP has no delivery guarantee and the camera does not retransmit,
+                // so one resend halfway through the window is worth the packet.
+                if (!resent && System.currentTimeMillis() > deadline - LOGIN_TIMEOUT_MS / 2) {
+                    resent = true
+                    runCatching { sock.send(DatagramPacket(packet, packet.size, target)) }
+                    trace.sent("CMD 0x2010 LOGIN (resend)", "${target.address?.hostAddress}:${target.port}")
+                }
                 continue
             }
             val packetIn = PpppProtocol.decode(datagram.data, datagram.length) ?: continue
@@ -485,6 +534,9 @@ class PpppTransport(
 
         /** The observed login reply took ~310ms; this is generous headroom. */
         const val LOGIN_TIMEOUT_MS = 5_000L
+
+        /** The vendor app pauses ~219ms between handshake and login. */
+        const val POST_HANDSHAKE_PAUSE_MS = 250L
 
         // The camera pings roughly every 300ms, so keepalives must be brisk.
         const val KEEPALIVE_INTERVAL_MS = 2_000L
